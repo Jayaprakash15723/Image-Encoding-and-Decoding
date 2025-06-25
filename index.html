@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Image Encoder/Decoder</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css">
+    <style>
+        body { padding: 2rem; background-color: #f5f9ff; }
+        .hidden { display: none; }
+        #resultContainer img { max-width: 100%; border: 1px solid #ccc; margin-top: 1rem; margin-bottom: 1rem; }
+        textarea { background: #f0f0f0; padding: 1rem; margin-top: 1rem; width: 100%; height: 200px; }
+        .success-header { color: #28a745; font-weight: bold; margin-top: 1rem; margin-bottom: 1rem; }
+        .button-group { margin-top: 1rem; }
+        .copy-notification { 
+            position: fixed; 
+            top: 20px; 
+            right: 20px; 
+            background: #28a745; 
+            color: white; 
+            padding: 10px 20px; 
+            border-radius: 5px; 
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .copy-notification.show { opacity: 1; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2 class="mb-4 text-center">🖼️ Image Encoding & Decoding Tool</h2>
+    <form id="converterForm">
+        <div class="form-group">
+            <label>Choose Action:</label>
+            <select name="action" class="form-control" id="actionSelect" required>
+                <option value="">-- Select --</option>
+                <option value="encode">Encode</option>
+                <option value="decode">Decode</option>
+            </select>
+        </div>
+
+        <div class="form-group" id="imageUpload">
+            <label>Upload Image:</label>
+            <input type="file" name="image" class="form-control-file" accept="image/*">
+        </div>
+
+        <div class="form-group hidden" id="codeInput">
+            <label>Paste Encoded Text:</label>
+            <textarea name="code_text" class="form-control" placeholder="Enter base64 / hex / binary / url text here..."></textarea>
+        </div>
+
+        <div class="form-group">
+            <label>Select Encoding Type:</label>
+            <select name="encoding" class="form-control" id="encodingSelect" required>
+                <option value="">-- Select --</option>
+                <option value="base64">Base64</option>
+                <option value="hex">Hex</option>
+                <option value="binary">Binary</option>
+                <option value="url">URL</option>
+                <option value="ascii">ASCII Art</option>
+                <option value="md5">MD5 Hash</option>
+                <option value="sha256">SHA256 Hash</option>
+                <option value="qr">QR Code (from filename)</option>
+                <option value="stegano">Steganography (hide/reveal text)</option>
+            </select>
+        </div>
+
+        <div class="form-group hidden" id="stegText">
+            <label>Text to Hide (for Steganography):</label>
+            <input type="text" name="steg_text" class="form-control" placeholder="Secret message to hide...">
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-block">Submit</button>
+    </form>
+
+    <hr>
+    <div id="resultContainer" class="mt-4"></div>
+</div>
+
+<!-- Copy notification -->
+<div id="copyNotification" class="copy-notification">Copied to clipboard!</div>
+
+<script>
+    const actionSelect = document.getElementById('actionSelect');
+    const encodingSelect = document.getElementById('encodingSelect');
+    const imageUpload = document.getElementById('imageUpload');
+    const codeInput = document.getElementById('codeInput');
+    const stegText = document.getElementById('stegText');
+
+    actionSelect.addEventListener('change', updateVisibility);
+    encodingSelect.addEventListener('change', updateVisibility);
+
+    function updateVisibility() {
+        const action = actionSelect.value;
+        const encoding = encodingSelect.value;
+
+        if (action === 'decode' && (encoding === 'md5' || encoding === 'sha256')) {
+            showNotification("You cannot decode MD5 or SHA256. Please choose another option.", 'warning');
+            encodingSelect.value = "";
+            return;
+        }
+
+        const showImage = (action === 'encode') || (encoding === 'stegano' && action === 'decode');
+        const showText = (action === 'decode' && encoding !== 'stegano');
+        const showStegText = (action === 'encode' && encoding === 'stegano');
+
+        imageUpload.classList.toggle('hidden', !showImage);
+        codeInput.classList.toggle('hidden', !showText);
+        stegText.classList.toggle('hidden', !showStegText);
+    }
+
+    function showNotification(message, type = 'success') {
+        const notification = document.getElementById('copyNotification');
+        notification.textContent = message;
+        notification.className = `copy-notification ${type}`;
+        notification.classList.add('show');
+        
+        setTimeout(() => {
+            notification.classList.remove('show');
+        }, 2000);
+    }
+
+    function copyToClipboard(text) {
+        navigator.clipboard.writeText(text).then(() => {
+            showNotification('Copied to clipboard!');
+        }).catch(() => {
+            // Fallback for older browsers
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            showNotification('Copied to clipboard!');
+        });
+    }
+
+    function downloadImage(dataUrl, filename = 'output.png') {
+        const link = document.createElement('a');
+        link.href = dataUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    document.getElementById('converterForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const formData = new FormData(form);
+
+        try {
+            const response = await fetch('/process', {
+                method: 'POST',
+                body: formData
+            });
+
+            const resultContainer = document.getElementById('resultContainer');
+            resultContainer.innerHTML = '';
+
+            const data = await response.json();
+
+            if (data.error) {
+                resultContainer.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                return;
+            }
+
+            const action = formData.get('action');
+            const encoding = formData.get('encoding');
+
+            // Handle encoding results (text output)
+            if (data.result && action === 'encode') {
+                const output = document.createElement('textarea');
+                output.id = 'encodedText';
+                output.readOnly = true;
+                output.textContent = data.result;
+                resultContainer.appendChild(output);
+
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'btn btn-outline-secondary mt-2';
+                copyBtn.textContent = '📋 Copy';
+                copyBtn.onclick = () => copyToClipboard(data.result);
+                resultContainer.appendChild(copyBtn);
+            }
+
+            // Handle decoding results (success message + image)
+            if (action === 'decode') {
+                if (encoding === 'stegano' && data.result) {
+                    // For steganography, show the revealed text
+                    const header = document.createElement('h3');
+                    header.className = 'success-header';
+                    header.textContent = 'Hidden Message Revealed:';
+                    resultContainer.appendChild(header);
+
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = 'alert alert-info';
+                    messageDiv.textContent = data.result;
+                    resultContainer.appendChild(messageDiv);
+
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'btn btn-outline-secondary mt-2';
+                    copyBtn.textContent = '📋 Copy Message';
+                    copyBtn.onclick = () => copyToClipboard(data.result);
+                    resultContainer.appendChild(copyBtn);
+                } else if (data.image_data_url) {
+                    // For image decoding, show success header
+                    const header = document.createElement('h3');
+                    header.className = 'success-header';
+                    header.textContent = 'Image Successfully Decoded!';
+                    resultContainer.appendChild(header);
+                }
+            }
+
+            // Handle image output (both encoding QR/stego and decoding)
+            if (data.image_data_url) {
+                const img = document.createElement('img');
+                img.src = data.image_data_url;
+                img.id = 'outputImage';
+                resultContainer.appendChild(img);
+
+                // Create button group for image actions
+                const buttonGroup = document.createElement('div');
+                buttonGroup.className = 'button-group';
+
+                const downloadBtn = document.createElement('button');
+                downloadBtn.className = 'btn btn-success mr-2';
+                downloadBtn.textContent = '⬇️ Download Image';
+                downloadBtn.onclick = () => downloadImage(data.image_data_url);
+                buttonGroup.appendChild(downloadBtn);
+
+                // Add copy image button for decoded images
+                if (action === 'decode' && encoding !== 'stegano') {
+                    const copyImageBtn = document.createElement('button');
+                    copyImageBtn.className = 'btn btn-outline-primary';
+                    copyImageBtn.textContent = '📋 Copy Image';
+                    copyImageBtn.onclick = async () => {
+                        try {
+                            const response = await fetch(data.image_data_url);
+                            const blob = await response.blob();
+                            await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+                            showNotification('Image copied to clipboard!');
+                        } catch (err) {
+                            showNotification('Could not copy image. Try downloading instead.', 'warning');
+                        }
+                    };
+                    buttonGroup.appendChild(copyImageBtn);
+                }
+
+                resultContainer.appendChild(buttonGroup);
+            }
+
+        } catch (error) {
+            const resultContainer = document.getElementById('resultContainer');
+            resultContainer.innerHTML = `<div class="alert alert-danger">An error occurred: ${error.message}</div>`;
+        }
+    });
+</script>
+</body>
+</html>
